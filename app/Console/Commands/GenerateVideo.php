@@ -7,6 +7,7 @@ use Symfony\Component\Process\Process;
 
 class GenerateVideo extends Command
 {
+    // test
     protected $signature = 'video:generate
         {--title=Relaxing Music : Text shown at the top of the video}
         {--duration=3600 : Video length in seconds}
