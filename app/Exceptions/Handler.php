@@ -3,6 +3,7 @@
 namespace App\Exceptions;
 
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Throwable;
 
 class Handler extends ExceptionHandler
@@ -37,5 +38,15 @@ class Handler extends ExceptionHandler
         $this->reportable(function (Throwable $e) {
             //
         });
+    }
+
+    public function render($request, Throwable $e)
+    {
+        if ($e instanceof PostTooLargeException) {
+            return redirect('/')
+                ->withErrors(['upload' => 'The uploaded file is larger than PHP allows. Increase upload_max_filesize and post_max_size, then restart Herd/PHP.']);
+        }
+
+        return parent::render($request, $e);
     }
 }

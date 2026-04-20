@@ -29,7 +29,7 @@ class VideoGeneratorController extends Controller
     public function uploadVideo(Request $request)
     {
         $request->validate([
-            'video' => ['required', 'file', 'mimes:mp4,mov,m4v,webm'],
+            'video' => ['required', 'file', 'mimes:mp4,mov,m4v,webm', 'max:102400'],
         ]);
 
         $this->storeUpload($request->file('video'), storage_path('app/assets/videos'));
@@ -40,7 +40,7 @@ class VideoGeneratorController extends Controller
     public function uploadMusic(Request $request)
     {
         $request->validate([
-            'music' => ['required', 'file', 'mimes:mp3,wav,m4a,aac,flac'],
+            'music' => ['required', 'file', 'mimes:mp3,wav,m4a,aac,flac', 'max:102400'],
         ]);
 
         $this->storeUpload($request->file('music'), storage_path('app/assets/music'));
@@ -54,13 +54,30 @@ class VideoGeneratorController extends Controller
             'title' => ['required', 'string', 'max:120'],
             'duration' => ['required', 'integer', 'min:1', 'max:21600'],
             'ffmpeg' => ['nullable', 'string', 'max:255'],
+            'videos' => ['required', 'array', 'min:1'],
+            'videos.*' => ['string'],
+            'music' => ['required', 'array', 'min:1'],
+            'music.*' => ['string'],
         ]);
+
+        $videoFiles = $this->selectedAssets('videos', ['mp4', 'mov', 'm4v', 'webm'], $validated['videos']);
+        $musicFiles = $this->selectedAssets('music', ['mp3', 'wav', 'm4a', 'aac', 'flac'], $validated['music']);
+
+        if ($videoFiles === []) {
+            return redirect('/')->withInput()->withErrors(['videos' => 'Select at least one valid video asset.']);
+        }
+
+        if ($musicFiles === []) {
+            return redirect('/')->withInput()->withErrors(['music' => 'Select at least one valid music asset.']);
+        }
 
         $videoJob = VideoJob::create([
             'title' => $validated['title'],
             'duration' => $validated['duration'],
             'ffmpeg_path' => $validated['ffmpeg'] ?: config('video.ffmpeg_path', 'ffmpeg'),
             'hide_timer' => $request->boolean('no_timer'),
+            'video_files' => $videoFiles,
+            'music_files' => $musicFiles,
             'status' => 'pending',
         ]);
 
@@ -117,6 +134,27 @@ class VideoGeneratorController extends Controller
         ]);
     }
 
+    public function destroyGenerated(string $file)
+    {
+        abort_unless($file === basename($file), 404);
+        abort_unless(strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'mp4', 404);
+
+        $path = storage_path('app/generated/'.$file);
+
+        abort_unless(is_file($path), 404);
+
+        unlink($path);
+
+        VideoJob::where('output_file', $file)->update([
+            'status' => 'deleted',
+            'output_file' => null,
+            'error' => 'Generated video was deleted.',
+            'finished_at' => now(),
+        ]);
+
+        return redirect('/')->with('status', 'Deleted '.$file.'.');
+    }
+
     private function storeUpload($file, string $directory): void
     {
         if (! is_dir($directory)) {
@@ -139,6 +177,16 @@ class VideoGeneratorController extends Controller
         }
 
         return $this->files($directory, $extensions);
+    }
+
+    private function selectedAssets(string $type, array $extensions, array $selected): array
+    {
+        $available = $this->assets($type, $extensions);
+        $selected = array_values(array_filter(array_map('basename', $selected)));
+
+        return array_values(array_filter($available, function ($file) use ($selected) {
+            return in_array($file, $selected, true);
+        }));
     }
 
     private function outputs(): array

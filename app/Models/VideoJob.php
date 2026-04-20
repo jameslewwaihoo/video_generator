@@ -11,6 +11,8 @@ class VideoJob extends Model
         'duration',
         'ffmpeg_path',
         'hide_timer',
+        'video_files',
+        'music_files',
         'status',
         'output_file',
         'log',
@@ -22,6 +24,8 @@ class VideoJob extends Model
     protected $casts = [
         'duration' => 'integer',
         'hide_timer' => 'boolean',
+        'video_files' => 'array',
+        'music_files' => 'array',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
     ];

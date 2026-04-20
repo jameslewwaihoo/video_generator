@@ -92,6 +92,32 @@
             margin-bottom: 16px;
         }
 
+        fieldset {
+            border: 1px solid #d9dedb;
+            border-radius: 8px;
+            margin: 0 0 16px;
+            padding: 14px;
+        }
+
+        legend {
+            font-weight: 700;
+            padding: 0 6px;
+        }
+
+        .checkbox-list {
+            display: grid;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .checkbox-list label {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            font-weight: 400;
+            overflow-wrap: anywhere;
+        }
+
         .row {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -116,6 +142,10 @@
 
         button.secondary {
             background: #38546b;
+        }
+
+        button.danger {
+            background: #b42318;
         }
 
         button.small {
@@ -215,6 +245,11 @@
             color: #842029;
         }
 
+        .status.deleted {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
         @media (max-width: 760px) {
             main {
                 width: min(100% - 24px, 1120px);
@@ -291,6 +326,10 @@
                 <h2>Generate MP4</h2>
                 <form action="/generate" method="post">
                     @csrf
+                    @php
+                        $selectedVideos = old('videos', $videos);
+                        $selectedMusic = old('music', $music);
+                    @endphp
                     <div class="row">
                         <div class="field">
                             <label for="title">Title overlay</label>
@@ -299,7 +338,7 @@
                         <div class="field">
                             <label for="duration">Duration in seconds</label>
                             <input id="duration" type="number" name="duration" value="{{ old('duration', 10) }}" min="1" max="21600" required>
-                            <div class="hint">Use 10 seconds for the first test render.</div>
+                            <div class="hint">Minimum target length. The final video may run longer so the last selected song can finish.</div>
                         </div>
                     </div>
 
@@ -307,6 +346,40 @@
                         <label for="ffmpeg">FFmpeg path</label>
                         <input id="ffmpeg" type="text" name="ffmpeg" value="{{ old('ffmpeg', $defaultFfmpegPath) }}">
                         <div class="hint">Default comes from FFMPEG_PATH in .env. Use a full path if the worker cannot find FFmpeg.</div>
+                    </div>
+
+                    <div class="row">
+                        <fieldset>
+                            <legend>Video Sources</legend>
+                            @if ($videos)
+                                <div class="checkbox-list">
+                                    @foreach ($videos as $video)
+                                        <label>
+                                            <input type="checkbox" name="videos[]" value="{{ $video }}" {{ in_array($video, $selectedVideos, true) ? 'checked' : '' }}>
+                                            <span>{{ $video }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                            @else
+                                <p class="empty">Upload at least one video first.</p>
+                            @endif
+                        </fieldset>
+
+                        <fieldset>
+                            <legend>Music Sources</legend>
+                            @if ($music)
+                                <div class="checkbox-list">
+                                    @foreach ($music as $track)
+                                        <label>
+                                            <input type="checkbox" name="music[]" value="{{ $track }}" {{ in_array($track, $selectedMusic, true) ? 'checked' : '' }}>
+                                            <span>{{ $track }}</span>
+                                        </label>
+                                    @endforeach
+                                </div>
+                            @else
+                                <p class="empty">Upload at least one music file first.</p>
+                            @endif
+                        </fieldset>
                     </div>
 
                     <div class="field">
@@ -340,7 +413,15 @@
                                 <tr>
                                     <td>#{{ $job->id }}</td>
                                     <td><span class="status {{ $job->status }}">{{ $job->status }}</span></td>
-                                    <td>{{ $job->title }}</td>
+                                    <td>
+                                        {{ $job->title }}
+                                        @if ($job->video_files || $job->music_files)
+                                            <div class="hint">
+                                                Videos: {{ implode(', ', $job->video_files ?: []) ?: 'all' }}<br>
+                                                Music: {{ implode(', ', $job->music_files ?: []) ?: 'all' }}
+                                            </div>
+                                        @endif
+                                    </td>
                                     <td>{{ $job->duration }}s</td>
                                     <td>
                                         @if ($job->isComplete())
@@ -348,12 +429,20 @@
                                             <video controls preload="metadata" src="/generated/{{ $job->output_file }}/watch"></video>
                                         @elseif ($job->status === 'failed')
                                             {{ $job->log ?: $job->error ?: 'Render failed.' }}
+                                        @elseif ($job->status === 'deleted')
+                                            Deleted
                                         @else
                                             Waiting for output
                                         @endif
                                     </td>
                                     <td>
-                                        @if ($job->status === 'failed')
+                                        @if ($job->isComplete())
+                                            <form action="/generated/{{ $job->output_file }}" method="post" onsubmit="return confirm('Delete this generated MP4 permanently?');">
+                                                @csrf
+                                                @method('DELETE')
+                                                <button class="small danger" type="submit">Delete</button>
+                                            </form>
+                                        @elseif ($job->status === 'failed')
                                             <form action="/jobs/{{ $job->id }}/retry" method="post">
                                                 @csrf
                                                 <button class="small secondary" type="submit">Retry</button>
@@ -375,6 +464,7 @@
 
             <section class="panel">
                 <h2>Available Assets</h2>
+                <p class="hint">Renders use these files in filename order, then repeat the list.</p>
                 <strong>Videos</strong>
                 @if ($videos)
                     <ul>
@@ -406,6 +496,11 @@
                         @foreach ($outputs as $output)
                             <li>
                                 <a href="/generated/{{ $output }}">{{ $output }}</a>
+                                <form action="/generated/{{ $output }}" method="post" onsubmit="return confirm('Delete this generated MP4 permanently?');">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button class="small danger" type="submit">Delete</button>
+                                </form>
                                 <video controls preload="metadata" src="/generated/{{ $output }}/watch"></video>
                             </li>
                         @endforeach

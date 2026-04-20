@@ -7,15 +7,16 @@ use Symfony\Component\Process\Process;
 
 class GenerateVideo extends Command
 {
-    // test
     protected $signature = 'video:generate
         {--title=Relaxing Music : Text shown at the top of the video}
         {--duration=3600 : Video length in seconds}
         {--output= : Output MP4 path}
         {--ffmpeg= : FFmpeg binary path}
+        {--video=* : Video asset filename to include}
+        {--music=* : Music asset filename to include}
         {--no-timer : Hide the elapsed timer overlay}';
 
-    protected $description = 'Generate an MP4 from a random stock video and random music track.';
+    protected $description = 'Generate an MP4 from looping stock video and music playlists.';
 
     public function handle()
     {
@@ -27,16 +28,16 @@ class GenerateVideo extends Command
             return Command::FAILURE;
         }
 
-        $video = $this->randomAsset(storage_path('app/assets/videos'), ['mp4', 'mov', 'm4v', 'webm']);
-        $music = $this->randomAsset(storage_path('app/assets/music'), ['mp3', 'wav', 'm4a', 'aac', 'flac']);
+        $videos = $this->playlistAssets(storage_path('app/assets/videos'), ['mp4', 'mov', 'm4v', 'webm'], (array) $this->option('video'));
+        $music = $this->playlistAssets(storage_path('app/assets/music'), ['mp3', 'wav', 'm4a', 'aac', 'flac'], (array) $this->option('music'));
 
-        if ($video === null) {
+        if ($videos === []) {
             $this->error('No video assets found in storage/app/assets/videos.');
 
             return Command::FAILURE;
         }
 
-        if ($music === null) {
+        if ($music === []) {
             $this->error('No music assets found in storage/app/assets/music.');
 
             return Command::FAILURE;
@@ -45,20 +46,32 @@ class GenerateVideo extends Command
         $output = $this->outputPath();
         $ffmpeg = (string) ($this->option('ffmpeg') ?: config('video.ffmpeg_path', 'ffmpeg'));
         $filter = $this->videoFilter((string) $this->option('title'), ! $this->option('no-timer'), $ffmpeg);
+        $musicDuration = 0.0;
+        $musicPlaylist = $this->repeatPlaylistToDuration($music, $duration, $ffmpeg, $musicDuration);
+        $renderDuration = (int) ceil($musicDuration) + 1;
+        $videoDuration = 0.0;
+        $videoPlaylist = $this->repeatPlaylistToDuration($videos, $renderDuration, $ffmpeg, $videoDuration);
+        $videoList = $this->writeConcatList($videoPlaylist, 'video-generator-videos-');
+        $musicList = $this->writeConcatList($musicPlaylist, 'video-generator-music-');
 
         $command = [
             $ffmpeg,
             '-y',
-            '-stream_loop',
-            '-1',
+            '-f',
+            'concat',
+            '-safe',
+            '0',
+            '-an',
             '-i',
-            $video,
-            '-stream_loop',
-            '-1',
+            $videoList,
+            '-f',
+            'concat',
+            '-safe',
+            '0',
             '-i',
-            $music,
+            $musicList,
             '-t',
-            (string) $duration,
+            (string) $renderDuration,
             '-vf',
             $filter,
             '-map',
@@ -89,8 +102,18 @@ class GenerateVideo extends Command
             $output,
         ];
 
-        $this->info('Video asset: '.$video);
-        $this->info('Music asset: '.$music);
+        $this->info('Video playlist:');
+        foreach ($videoPlaylist as $video) {
+            $this->info('- '.$video);
+        }
+
+        $this->info('Music playlist:');
+        foreach ($musicPlaylist as $track) {
+            $this->info('- '.$track);
+        }
+
+        $this->info('Requested duration: '.$duration.' seconds');
+        $this->info('Render duration: '.$renderDuration.' seconds, extended to finish the last selected song.');
         $this->info('Output: '.$output);
 
         $process = new Process($command, base_path(), null, null, null);
@@ -98,6 +121,9 @@ class GenerateVideo extends Command
         $process->run(function ($type, $buffer) {
             $this->output->write($buffer);
         });
+
+        @unlink($videoList);
+        @unlink($musicList);
 
         if (! $process->isSuccessful()) {
             $this->error('FFmpeg failed. Confirm FFmpeg is installed and set FFMPEG_PATH=/full/path/to/ffmpeg in .env if needed.');
@@ -110,23 +136,105 @@ class GenerateVideo extends Command
         return Command::SUCCESS;
     }
 
-    private function randomAsset(string $directory, array $extensions): ?string
+    private function playlistAssets(string $directory, array $extensions, array $selectedFiles = []): array
     {
         if (! is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
 
+        $selectedFiles = array_values(array_filter(array_map('basename', $selectedFiles)));
         $files = array_values(array_filter(scandir($directory) ?: [], function ($file) use ($directory, $extensions) {
             $path = $directory.DIRECTORY_SEPARATOR.$file;
 
             return is_file($path) && in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), $extensions, true);
         }));
 
-        if ($files === []) {
-            return null;
+        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+
+        if ($selectedFiles !== []) {
+            $files = array_values(array_filter($files, function ($file) use ($selectedFiles) {
+                return in_array($file, $selectedFiles, true);
+            }));
         }
 
-        return $directory.DIRECTORY_SEPARATOR.$files[array_rand($files)];
+        return array_map(function ($file) use ($directory) {
+            return $directory.DIRECTORY_SEPARATOR.$file;
+        }, $files);
+    }
+
+    private function repeatPlaylistToDuration(array $files, int $duration, string $ffmpeg, ?float &$totalDuration = null): array
+    {
+        $playlist = [];
+        $runningDuration = 0.0;
+        $durations = [];
+        $ffprobe = $this->ffprobePath($ffmpeg);
+
+        foreach ($files as $file) {
+            $fileDuration = $this->mediaDuration($ffprobe, $file);
+            $durations[$file] = $fileDuration > 0 ? $fileDuration : 1.0;
+        }
+
+        while ($runningDuration < $duration) {
+            foreach ($files as $file) {
+                $playlist[] = $file;
+                $runningDuration += $durations[$file];
+
+                if ($runningDuration >= $duration) {
+                    break;
+                }
+            }
+        }
+
+        $totalDuration = $runningDuration;
+
+        return $playlist;
+    }
+
+    private function mediaDuration(string $ffprobe, string $file): float
+    {
+        $process = new Process([
+            $ffprobe,
+            '-v',
+            'error',
+            '-show_entries',
+            'format=duration',
+            '-of',
+            'default=noprint_wrappers=1:nokey=1',
+            $file,
+        ], base_path(), null, null, 15);
+        $process->run();
+
+        if (! $process->isSuccessful()) {
+            return 0.0;
+        }
+
+        return (float) trim($process->getOutput());
+    }
+
+    private function ffprobePath(string $ffmpeg): string
+    {
+        if ($ffmpeg === 'ffmpeg') {
+            return 'ffprobe';
+        }
+
+        return dirname($ffmpeg).DIRECTORY_SEPARATOR.'ffprobe';
+    }
+
+    private function writeConcatList(array $files, string $prefix): string
+    {
+        $path = tempnam(sys_get_temp_dir(), $prefix);
+        $lines = array_map(function ($file) {
+            return "file '".$this->escapeConcatPath($file)."'";
+        }, $files);
+
+        file_put_contents($path, implode(PHP_EOL, $lines).PHP_EOL);
+
+        return $path;
+    }
+
+    private function escapeConcatPath(string $path): string
+    {
+        return str_replace("'", "'\\''", $path);
     }
 
     private function outputPath(): string

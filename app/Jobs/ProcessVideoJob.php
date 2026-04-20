@@ -43,6 +43,14 @@ class ProcessVideoJob implements ShouldQueue
             '--ffmpeg' => $videoJob->ffmpeg_path ?: 'ffmpeg',
         ];
 
+        foreach ($videoJob->video_files ?: [] as $videoFile) {
+            $arguments['--video'][] = $videoFile;
+        }
+
+        foreach ($videoJob->music_files ?: [] as $musicFile) {
+            $arguments['--music'][] = $musicFile;
+        }
+
         if ($videoJob->hide_timer) {
             $arguments['--no-timer'] = true;
         }

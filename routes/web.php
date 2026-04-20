@@ -20,4 +20,5 @@ Route::post('/assets/music', [VideoGeneratorController::class, 'uploadMusic']);
 Route::post('/generate', [VideoGeneratorController::class, 'generate']);
 Route::post('/jobs/{videoJob}/retry', [VideoGeneratorController::class, 'retry']);
 Route::get('/generated/{file}/watch', [VideoGeneratorController::class, 'watch']);
+Route::delete('/generated/{file}', [VideoGeneratorController::class, 'destroyGenerated']);
 Route::get('/generated/{file}', [VideoGeneratorController::class, 'download']);
